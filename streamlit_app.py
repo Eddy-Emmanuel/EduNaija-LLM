@@ -176,6 +176,51 @@ def extract_content_from_image(image_path):
         st.error(f"Error extracting content from image: {str(e)}")
         return None
 
+def build_conversation_history():
+    """Build conversation history from session state messages"""
+    conversation = []
+    
+    for msg in st.session_state.messages:
+        role = msg["role"]
+        content = msg["content"]
+        
+        # Convert role to match agent expectations (user/assistant to human/ai)
+        if role == "user":
+            conversation.append(("user", content))
+        elif role == "assistant":
+            conversation.append(("assistant", content))
+    
+    return conversation
+
+def build_system_prompt(selected_language):
+    """Build system prompt with persistent context"""
+    system_prompt = (
+        f"You are EduNaija AI Tutor, created by Eddy and Israel Odeajo. "
+        f"You are a helpful educational assistant that can communicate in multiple Nigerian languages. "
+        f"The user has selected {selected_language} as their preferred language for responses. "
+        f"Current time: {datetime.now().isoformat()}\n\n"
+        f"IMPORTANT: Remember personal information shared by the user throughout the conversation, "
+        f"including their name, preferences, and any context they provide. "
+        f"Use this information naturally in your responses.\n\n"
+    )
+    
+    # Add PDF context if available
+    if st.session_state.temp_path:
+        system_prompt += "A PDF document has been uploaded and is available for answering questions.\n"
+    
+    # Add extracted content from image if available
+    if st.session_state.extracted_text:
+        system_prompt += (
+            f"\nCONTENT EXTRACTED FROM UPLOADED IMAGE:\n"
+            f"{st.session_state.extracted_text}\n"
+            f"END OF EXTRACTED CONTENT\n\n"
+        )
+        
+        if st.session_state.temp_path:
+            system_prompt += "Note: Both PDF document and image content are available. Use both sources as needed.\n"
+    
+    return system_prompt
+
 # Sidebar for settings
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -297,39 +342,35 @@ if user_input:
         full_response = ""
         
         try:
-            # Build the query with context
-            query_with_context = (
-                f"[Your Name: EduNaija AI Tutor] "
-                f"[Your Creator: Eddy and Israel Odeajo] "
-                f"[Selected Response Language: {selected_language}] "
-                f"[Current time: {datetime.now().isoformat()}] "
-            )
+            # Build conversation history with context
+            conversation_messages = []
             
-            # Add PDF context if available
-            if st.session_state.temp_path:
-                query_with_context += "[PDF Document Available for RAG] "
-            
-            # Add extracted content from image if available
-            if st.session_state.extracted_text:
-                query_with_context += (
-                    f"\n\n[CONTENT EXTRACTED FROM UPLOADED IMAGE]:\n"
-                    f"{st.session_state.extracted_text}\n"
-                    f"[END OF EXTRACTED CONTENT]\n\n"
-                )
+            # Add system prompt as the first message only on first interaction
+            if len(st.session_state.messages) == 1:
+                system_prompt = build_system_prompt(selected_language)
+                conversation_messages.append(("system", system_prompt))
+                conversation_messages.append(("user", user_input))
+            else:
+                # For subsequent messages, include system prompt once, then full chat history
+                system_prompt = build_system_prompt(selected_language)
+                conversation_messages.append(("system", system_prompt))
                 
-                # If both PDF and image are available
-                if st.session_state.temp_path:
-                    query_with_context += "[NOTE: Both PDF document and image content are available for answering this question. Use both sources as needed.]\n\n"
-            
-            # Add user input
-            query_with_context += f"User Question: {user_input}"
+                # Get full chat history
+                chat_history = build_conversation_history()
+                
+                # Remove the last message (current user input) since it was just added
+                chat_history = chat_history[:-1]
+                
+                # Add all previous conversation
+                conversation_messages.extend(chat_history)
+                
+                # Add current user message
+                conversation_messages.append(("user", user_input))
             
             # Stream the response from the agent
             for chunk in agent.stream(
                 {
-                    "messages": [
-                        ("user", query_with_context)
-                    ]
+                    "messages": conversation_messages
                 },
                 stream_mode="messages",
             ):
